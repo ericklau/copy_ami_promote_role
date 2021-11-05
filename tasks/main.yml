@@ -1,0 +1,66 @@
+---
+# tasks file for copy_ami_promote
+- name: Gather information on newly created instance
+  ec2_instance_info:
+    filters:
+      "tag:Name": "{{ inventory_hostname_short }}"
+      instance-state-name: ["running"]
+    region: "{{ region }}"
+  register: ec2
+
+- fail: msg="please check if ec2 is up and running"
+  when: ec2|length == 0
+
+- name: print out variables
+  debug: var=ec2
+
+- name: Create AMI based on last successful build
+  amazon.aws.ec2_ami:
+    instance_id: "{{ ec2.instances[0].instance_id }}"
+    name: "{{ inventory_hostname_short }}-{{ tower_job_id }}-{{ env }}-tmp"
+    wait: yes
+    state: present
+    launch_permissions:
+      user_ids: ['123456789012']
+    tags:
+        Patch: 1.0.0
+        Version: 1.0.0
+        Name: "{{ inventory_hostname_short }}-{{ tower_job_id }}-{{ env }}-tmp"
+  register: instance_ami
+
+- name: print out variables
+  debug: var=instance_ami
+
+- name: Encrypted AMI copy with specified key
+  community.aws.ec2_ami_copy:
+    wait: yes
+    region: us-east-1
+    source_region: us-east-1
+    source_image_id: "{{ instance_ami.image_id }}"
+    tags:
+        Name: "{{ inventory_hostname_short }}-{{ tower_job_id }}-{{ env }}-{{ encrypted }}"
+        Patch: 1.0.0
+        Version: 1.0.0
+    encrypted: yes
+    kms_key_id: "{{ kms_key_id }}"
+  register: encrypted_ami
+
+- name: Allow AMI to be launched by another account
+  amazon.aws.ec2_ami:
+    tags:
+        Name: "{{ inventory_hostname_short }}-{{ tower_job_id }}-{{ env }}"
+        Patch: 1.0.0
+        Version: 1.0.0
+    image_id: "{{ encrypted_ami.image_id }}"
+    state: present
+    launch_permissions:
+      user_ids: ['123456789012']
+
+- name: remove unencrypted ami
+  amazon.aws.ec2_ami:
+    image_id: "{{ instance_ami.image_id }}"
+    state: absent
+
+#Switch to Test Environment - using STS Role
+
+#Build EC2
